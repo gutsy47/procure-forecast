@@ -137,7 +137,7 @@ def get_stocks(path: str, is_header: bool = True) -> list:
                 current_category = row[0].strip()
             elif row[1]:
                 # Первый столбец всегда заполнен, если второй тоже - это актив
-                result.append([quarter, current_category] + [cell for cell in row[1:4]])
+                result.append([quarter, current_category, row[0], row[2], row[3]])
     else:
         current_category = None
         for row in sheet.iter_rows(min_row=10, max_col=23, values_only=True):
@@ -162,6 +162,7 @@ def get_catalog(path: str, is_header: bool = True) -> list:
     - KPGZ: Категория в Классификаторе Предметов Государственного Заказа
     - SPGZ Code: Код СПГЗ
     - SPGZ: Категория в Справочнике Предметов Государственного Заказа
+    - RK Code: Реестровый номер в РК
 
     :param path: Путь к файлу.
     :param is_header: Записывать ли заголовки? При массовом получении для объединения заголовки не нужны.
@@ -169,12 +170,64 @@ def get_catalog(path: str, is_header: bool = True) -> list:
     """
 
     sheet: Worksheet = get_worksheet(path)
-    header = ["Name", "Params", "Price", "Category", "KPGZ Code", "KPGZ", "SPGZ Code", "SPGZ"]
+    header = ["Name", "Params", "Price", "Category", "KPGZ Code", "KPGZ", "SPGZ Code", "SPGZ", "RK Code"]
     result = [header] if is_header else []
 
-    for row in sheet.iter_rows(min_row=2, max_col=8, values_only=True):
+    for row in sheet.iter_rows(min_row=2, max_col=9, values_only=True):
         if row[0]:
             result.append([row[0].strip(),  [x for x in row[1].split(';')]] + [x for x in row[2:]])
+
+    return result
+
+
+def get_contracts(path: str, is_header: bool = True) -> list:
+    """Возвращает данные из таблицы с выгрузкой контрактов по заказчику. Ниже приведены заголовки.
+
+    - SPGZ Code: ID СПГЗ
+    - SPGZ: Наименование СПГЗ
+    - RK Code: Реестровый номер в РК
+    - Lot:Номер лота в закупке
+    - IKZ: ИКЗ
+    - Customer: Заказчик
+    - Name: Наименование (предмет) ГК
+    - Method: Способ определения поставщика
+    - Reason: Основание заключения контракта с ед. поставщиком
+    - Status: Статус контракта
+    - Version: № версии
+    - Price Actual: Цена ГК, руб.
+    - Price: Цена ГК при заключении, руб.
+    - Paid Cash: Оплачено, руб.
+    - Paid Percent: Оплачено, %
+    - KPGZ Code: Конечный код КПГЗ
+    - KPGZ: Конечное наименование КПГЗ
+    - Date Start: Дата заключения
+    - Date Reg: Дата регистрации
+    - Date Upd: Дата последнего изменения
+    - Date Exp From: Срок исполнения с
+    - Date Exp To: Срок исполнения по
+    - Date End: Дата окончания срока действия
+    - MSP: Принадлежность поставщика к МСП на момент заключения ГК
+    - City: Наименование субъекта РФ поставщика
+    - Law: Закон-основание (44/223)
+    - Execution: Электронное исполнение
+    - Executed: Исполнено поставщиком
+
+    :param path: Путь к файлу.
+    :param is_header: Записывать ли заголовки? При массовом получении для объединения заголовки не нужны.
+    :return: Список вида [[header], [row1], [row2], ...]
+    """
+
+    sheet: Worksheet = get_worksheet(path)
+    header = [
+        "SPGZ Code", "SPGZ", "RK Code", "Lot", "IKZ", "Customer", "Name", "Method", "Reason", "Status", "Version",
+        "Price Actual", "Price", "Paid Cash", "Paid Percent", "KPGZ Code", "KPGZ", "Date Start", "Date Reg",
+        "Date Upd", "Date Exp From", "Date Exp To", "Date End", "MSP", "City", "Law", "Execution", "Executed",
+    ]
+    result = [header] if is_header else []
+
+    for row in sheet.iter_rows(min_row=2, max_col=28, values_only=True):
+        if row[0]:
+            result.append(list(row))
 
     return result
 
@@ -182,8 +235,9 @@ def get_catalog(path: str, is_header: bool = True) -> list:
 if __name__ == '__main__':
     # Устанавливают нужные таблицы для выгрузки
     is_cashflow = False
-    is_stocks = False
-    is_catalog = True
+    is_stocks = True
+    is_catalog = False
+    is_contracts = False
 
     # Убираем ограничение по ширине и количеству столбцов при выводе фрейма
     pd.set_option("display.max_columns", None)
@@ -233,3 +287,12 @@ if __name__ == '__main__':
 
         df_catalog.to_csv("../data/processed/catalog.csv", index=False)
 
+    # Пример получения данных из выгрузки контрактов
+    if is_contracts:
+        contracts_path = "../data/raw/Выгрузка контрактов по Заказчику.xlsx"
+        contracts_data = get_contracts(contracts_path)
+
+        df_contracts = pd.DataFrame(contracts_data[1:], columns=contracts_data[0])
+        print(df_contracts)
+
+        df_contracts.to_csv("../data/processed/contracts.csv", index=False)
