@@ -3,6 +3,25 @@ from openpyxl.worksheet.worksheet import Worksheet
 import pandas as pd
 
 from os import listdir
+import re
+
+
+def get_worksheet(path: str) -> Worksheet:
+    """Возвращает объект странице в Excel-книге с проверкой счёта
+
+    Получает из path файл книги и возвращает активный лист из соответствующей таблицы.
+    Любые названия, не содержащие "105", "101", "21" игнорируются.
+
+    :param path: Путь к файлу .xlsx
+    :return: Объект листа
+    """
+    # Проверяем название таблицы, мы умеем читать только счета 21, 101, 105
+    if " 105" not in path and " 21" not in path and " 101" not in path:
+        raise AttributeError("Таблица неизвестного счёта: " + path)
+
+    # Возвращаем единственный лист в книге
+    workbook: Workbook = load_workbook(filename=path, read_only=True)
+    return workbook.active
 
 
 def get_cashflow(path: str, is_header: bool = True) -> list:
@@ -22,21 +41,12 @@ def get_cashflow(path: str, is_header: bool = True) -> list:
     - End Amount: Количество на последнее число (31.03, 30.06, 30.09, 30.12)
     - End Cost: Стоимость на последнее число
 
-
-    :param path: str - Путь к файлу вида "../data/raw/Обороты по счету/*.xlsx"
-    :param  is_header: bool - Записывать ли заголовки? При массовом получении для объединения заголовки не нужны
-    :return: list - Список вида [[header], [row1], [row2], ...]
+    :param path: Путь к файлу вида "../data/raw/Обороты по счету/*.xlsx".
+    :param  is_header: Записывать ли заголовки? При массовом получении для объединения заголовки не нужны.
+    :return: Список вида [[header], [row1], [row2], ...]
     """
 
-    # Сразу отсеиваем таблицы, которые не умеем читать, чтобы не тратить время на загрузку
-    if " 105 " not in path and " 21 " not in path and " 101 " not in path:
-        raise AttributeError("Таблица неизвестного счёта: " + path)
-
-    # Открываем единственный лист в книге
-    workbook: Workbook = load_workbook(filename=path, read_only=True)
-    sheet: Worksheet = workbook.active
-
-    # Заголовки и переменная будущей таблицы
+    sheet: Worksheet = get_worksheet(path)
     header = [
         "Quarter", "Category", "Code", "Name", "Measure", "Start Amount", "Start Cost", "Flow In Amount",
         "Flow In Cost", "Flow Out Amount", "Flow Out Cost", "End Amount", "End Cost"
@@ -44,7 +54,7 @@ def get_cashflow(path: str, is_header: bool = True) -> list:
     result = [header] if is_header else []
 
     # Таблицы имеют две различные структуры в зависимости от счета
-    if " 105 " in path:
+    if " 105" in path:
         quarter_cell = sheet[1][7].value.split()  # Текущий квартал из ячейки (1,8) в виде 10*Y + Q
         quarter = int(quarter_cell[2]) + int(quarter_cell[-2]) * 10
 
@@ -91,21 +101,87 @@ def get_cashflow(path: str, is_header: bool = True) -> list:
     return result
 
 
+def get_stocks(path: str, is_header: bool = True) -> list:
+    """Возвращает данные из таблиц ведомостей складских остатков в виде csv-списка. Ниже приведены заголовки.
+
+    - Quarter: Число, получаемое как 10*Y + Q. Например, 20241 = 2024, 1 квартал
+    - Category: Инвентарный/номенклатурный номер категории актива
+    - Name: Наименование нефинансового актива
+    - End Amount: Количество на последнее число (31.03, 30.06, 30.09, 30.12)
+    - End Cost: Стоимость на последнее число
+
+    :param path: Путь к файлу.
+    :param is_header: Записывать ли заголовки? При массовом получении для объединения заголовки не нужны.
+    :return: Список вида [[header], [row1], [row2], ...]
+    """
+
+    sheet: Worksheet = get_worksheet(path)
+    header = ["Quarter", "Category", "Name", "End Amount", "End Cost"]
+    result = [header] if is_header else []
+
+    # Получаем квартал на основе даты в названии файла
+    date_pattern = re.compile(r"\d{2}\.\d{2}\.\d{4}")
+    date = date_pattern.search(path.replace('\\', '/').split('/')[-1])
+    if not date:
+        raise AttributeError(f"В названии таблицы {path} не указана дата")
+    d, m, y = date[0].split('.')
+    quarter = 10 * int(y) + int(m) // 3
+
+    if " 105" in path:
+        current_category = None
+        for row in sheet.iter_rows(min_row=8, max_col=4, values_only=True):
+            if row[0].startswith("105.") and not row[1]:
+                # Если строка начинается со 105. и рядом нет цены, то это категория
+                current_category = row[0].strip()
+            elif row[1]:
+                # Первый столбец всегда заполнен, если второй тоже - это актив
+                result.append([quarter, current_category] + [cell for cell in row[1:4]])
+    else:
+        current_category = None
+        for row in sheet.iter_rows(min_row=10, max_col=23, values_only=True):
+            if row[0] and (row[0].startswith("21.") or row[0].startswith("101.")) and not row[2]:
+                # Если строка начинается с 21. и рядом нет названия актива, то это категория
+                current_category = row[0].split(',')[0].strip()
+            elif row[2]:
+                # Первый столбец всегда заполнен, названия активов - в третьем столбце
+                result.append([quarter, current_category, row[2], row[20], row[22]])
+
+    return result
+
+
 if __name__ == '__main__':
-    # Пример получения данных
-    data = []
+    # Убираем ограничение по ширине и количеству столбцов при выводе фрейма
+    pd.set_option("display.max_columns", None)
+    pd.set_option("display.width", None)
+
+    # Пример получения данных оборотных ведомостей
+    cashflow_data = []
     is_first = True
     cashflow_paths = ["../data/raw/Обороты по счету/" + x for x in listdir("../data/raw/Обороты по счету")]
     for x in cashflow_paths:
         try:
-            data += get_cashflow(x, is_header=is_first)
+            cashflow_data += get_cashflow(x, is_header=is_first)
             is_first = False
-        except PermissionError as err:
-            print(err)
+        except PermissionError:
+            print("Отказано в доступе к файлу", x)
 
-    df = pd.DataFrame(data[1:], columns=data[0])
-    pd.set_option("display.max_columns", None)
-    pd.set_option("display.width", None)
-    print(df)
+    df_cashflow = pd.DataFrame(cashflow_data[1:], columns=cashflow_data[0])
+    print(df_cashflow)
 
-    df.to_csv("../data/processed/cashflow.csv", index=False)
+    df_cashflow.to_csv("../data/processed/cashflow.csv", index=False)
+
+    # Пример получения данных ведомостей складских остатков
+    stocks_data = []
+    is_first = True
+    stocks_paths = ["../data/raw/Складские остатки/" + x for x in listdir("../data/raw/Складские остатки")]
+    for x in stocks_paths:
+        try:
+            stocks_data += get_stocks(x, is_header=is_first)
+            is_first = False
+        except PermissionError:
+            print("Отказано в доступе к файлу", x)
+
+    df_stocks = pd.DataFrame(stocks_data[1:], columns=stocks_data[0])
+    print(df_stocks)
+
+    df_stocks.to_csv("../data/processed/stocks.csv", index=False)
